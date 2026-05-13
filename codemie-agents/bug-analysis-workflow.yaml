@@ -1,5 +1,9 @@
 enable_summarization_node: false
 max_concurrency: 1
+start_message: |
+  Analyze the next unassigned bug ticket in Jira project EPMCDMETST.
+  Read the bug details, analyze the source code in GitHub repo soundar-14/MultiAgentKataApp,
+  identify the root cause, suggest a fix, and post a complete analysis report as a comment on the Jira ticket.
 
 assistants:
   - id: jira_agent
