@@ -32,7 +32,8 @@ assistants:
 states:
   - id: jira_ticket_picker
     assistant_id: jira_agent
-    next: bug_reader
+    next:
+      state_id: bug_reader
     output_schema: |
       {
         "issueId": "Jira ticket ID like EPMCDMETST-123, or null if no ticket found",
@@ -59,7 +60,8 @@ states:
 
   - id: bug_reader
     assistant_id: jira_agent
-    next: code_analysis
+    next:
+      state_id: code_analysis
     output_schema: |
       {
         "issueId": "ticket ID",
@@ -94,7 +96,8 @@ states:
 
   - id: code_analysis
     assistant_id: github_agent
-    next: root_cause
+    next:
+      state_id: root_cause
     output_schema: |
       {
         "filesRead": ["list of files read"],
@@ -136,7 +139,8 @@ states:
 
   - id: root_cause
     assistant_id: reasoning_agent
-    next: solution
+    next:
+      state_id: solution
     output_schema: |
       {
         "rootCauseCategory": "NULL_REFERENCE | CONNECTION_POOL_EXHAUSTION | CONFIGURATION_MISSING | INPUT_VALIDATION_MISSING | RACE_CONDITION | EXTERNAL_TIMEOUT",
@@ -167,7 +171,8 @@ states:
 
   - id: solution
     assistant_id: github_agent
-    next: summary
+    next:
+      state_id: summary
     output_schema: |
       {
         "primaryFix": {
@@ -219,7 +224,8 @@ states:
 
   - id: summary
     assistant_id: jira_agent
-    next: end
+    next:
+      state_id: end
     output_schema: |
       {
         "issueId": "Jira ticket ID",
