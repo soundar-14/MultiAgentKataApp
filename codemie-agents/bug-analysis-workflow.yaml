@@ -1,6 +1,8 @@
 states:
   - id: jira_ticket_picker
     type: agent
+    next: bug_reader
+    assistant_id: c63e88a8-28ec-48ad-a28b-e0e4285d7d36
     is_connected: true
     position:
       x: 0
@@ -8,14 +10,13 @@ states:
     measured:
       width: 256
       height: 66
-    data:
-      assistant_id: c63e88a8-28ec-48ad-a28b-e0e4285d7d36
+    data: {}
     selected: false
-    transitions:
-      - next: bug_reader
 
   - id: bug_reader
     type: agent
+    next: code_analysis
+    assistant_id: fc1a2c0b-48c7-484a-aef3-5890f1a68e7e
     is_connected: true
     position:
       x: 0
@@ -23,14 +24,13 @@ states:
     measured:
       width: 256
       height: 66
-    data:
-      assistant_id: fc1a2c0b-48c7-484a-aef3-5890f1a68e7e
+    data: {}
     selected: false
-    transitions:
-      - next: code_analysis
 
   - id: code_analysis
     type: agent
+    next: root_cause
+    assistant_id: cae0dda5-b60c-4cb3-8118-ef2678f66e40
     is_connected: true
     position:
       x: 0
@@ -38,14 +38,13 @@ states:
     measured:
       width: 256
       height: 66
-    data:
-      assistant_id: cae0dda5-b60c-4cb3-8118-ef2678f66e40
+    data: {}
     selected: false
-    transitions:
-      - next: root_cause
 
   - id: root_cause
     type: agent
+    next: solution
+    assistant_id: 0c626beb-3e05-4836-bd0a-62035b793db3
     is_connected: true
     position:
       x: 0
@@ -53,14 +52,13 @@ states:
     measured:
       width: 256
       height: 66
-    data:
-      assistant_id: 0c626beb-3e05-4836-bd0a-62035b793db3
+    data: {}
     selected: false
-    transitions:
-      - next: solution
 
   - id: solution
     type: agent
+    next: summary
+    assistant_id: 52d9e2e9-2fc6-4a47-97b1-f50cd7c58ce4
     is_connected: true
     position:
       x: 0
@@ -68,14 +66,13 @@ states:
     measured:
       width: 256
       height: 66
-    data:
-      assistant_id: 52d9e2e9-2fc6-4a47-97b1-f50cd7c58ce4
+    data: {}
     selected: false
-    transitions:
-      - next: summary
 
   - id: summary
     type: agent
+    next: end
+    assistant_id: 22192129-4479-4bb3-8d08-80ae0ac1a6fa
     is_connected: true
     position:
       x: 0
@@ -83,15 +80,13 @@ states:
     measured:
       width: 256
       height: 66
-    data:
-      assistant_id: 22192129-4479-4bb3-8d08-80ae0ac1a6fa
+    data: {}
     selected: false
-    transitions:
-      - next: end
 
 meta_states:
   - id: start
     type: start
+    next: jira_ticket_picker
     is_connected: true
     position:
       x: 0
@@ -112,19 +107,3 @@ meta_states:
       height: 66
     data: {}
     selected: false
-
-transitions:
-  - from: start
-    next: jira_ticket_picker
-  - from: jira_ticket_picker
-    next: bug_reader
-  - from: bug_reader
-    next: code_analysis
-  - from: code_analysis
-    next: root_cause
-  - from: root_cause
-    next: solution
-  - from: solution
-    next: summary
-  - from: summary
-    next: end
