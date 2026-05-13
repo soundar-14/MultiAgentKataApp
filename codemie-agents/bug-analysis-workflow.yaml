@@ -9,7 +9,7 @@ assistants:
       post comments, and update issue status using the Jira tool.
       Always return valid JSON output exactly as specified in the task.
     tools:
-      - name: Jira
+      - name: Generic Jira
 
   - id: github_agent
     exclude_extra_context_tools: true
@@ -18,7 +18,7 @@ assistants:
       You can read source files and analyze code patterns using the GitHub tool.
       Always return valid JSON output exactly as specified in the task.
     tools:
-      - name: GitHub
+      - name: Github
 
   - id: reasoning_agent
     exclude_extra_context_tools: true
