@@ -3,31 +3,25 @@ max_concurrency: 1
 
 assistants:
   - id: jira_agent
-    exclude_extra_context_tools: true
+    model: gpt-4.1
     system_prompt: |
       You are a Jira expert agent. You can search issues, read issue details,
-      post comments, and update issue status using the Jira tool.
+      post comments, and update issue status.
       Always return valid JSON output exactly as specified in the task.
-    tools:
-      - name: Generic Jira
 
   - id: github_agent
-    exclude_extra_context_tools: true
+    model: gpt-4.1
     system_prompt: |
       You are a code analysis expert with access to GitHub repositories.
-      You can read source files and analyze code patterns using the GitHub tool.
+      You can read source files and analyze code patterns.
       Always return valid JSON output exactly as specified in the task.
-    tools:
-      - name: Github
 
   - id: reasoning_agent
-    exclude_extra_context_tools: true
+    model: gpt-4.1
     system_prompt: |
       You are an expert software engineer specializing in root cause analysis.
       You analyze bug reports and code patterns to identify root causes.
-      You do not use any external tools — you reason only from provided context.
       Always return valid JSON output exactly as specified in the task.
-    tools: []
 
 states:
   - id: jira_ticket_picker
