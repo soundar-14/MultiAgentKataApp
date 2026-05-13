@@ -1,107 +1,363 @@
+enable_summarization_node: false
+max_concurrency: 1
+
+assistants:
+  - id: jira_agent
+    exclude_extra_context_tools: true
+    system_prompt: |
+      You are a Jira expert agent. You can search issues, read issue details,
+      post comments, and update issue status using the Jira tool.
+      Always return valid JSON output exactly as specified in the task.
+    tools:
+      - name: Jira
+
+  - id: github_agent
+    exclude_extra_context_tools: true
+    system_prompt: |
+      You are a code analysis expert with access to GitHub repositories.
+      You can read source files and analyze code patterns using the GitHub tool.
+      Always return valid JSON output exactly as specified in the task.
+    tools:
+      - name: GitHub
+
+  - id: reasoning_agent
+    exclude_extra_context_tools: true
+    system_prompt: |
+      You are an expert software engineer specializing in root cause analysis.
+      You analyze bug reports and code patterns to identify root causes.
+      You do not use any external tools — you reason only from provided context.
+      Always return valid JSON output exactly as specified in the task.
+    tools: []
+
 states:
   - id: jira_ticket_picker
-    type: agent
+    assistant_id: jira_agent
     next: bug_reader
-    assistant_id: c63e88a8-28ec-48ad-a28b-e0e4285d7d36
-    is_connected: true
-    position:
-      x: 0
-      y: 120
-    measured:
-      width: 256
-      height: 66
-    data: {}
-    selected: false
+    output_schema: |
+      {
+        "issueId": "Jira ticket ID like EPMCDMETST-123, or null if no ticket found",
+        "summary": "title of the bug ticket",
+        "description": "full description from Jira",
+        "priority": "Critical | High | Medium | Low",
+        "reporter": "name of who reported it",
+        "environment": "Production | Staging | Dev",
+        "rawDescription": "full raw text of description including any stack trace"
+      }
+    task: |
+      Find the next unassigned bug ticket in Jira.
+
+      Use the Jira tool to search with this JQL query:
+      project = EPMCDMETST AND issuetype = Bug AND status = "To Do" AND assignee is EMPTY ORDER BY priority DESC, created ASC
+
+      Pick the FIRST result only (highest priority, oldest unassigned).
+      Fetch full details of that ticket.
+
+      If no unassigned bugs found, return:
+      { "issueId": null, "message": "No unassigned bugs found in EPMCDMETST" }
+
+      Return valid JSON only matching the output schema. No extra text.
 
   - id: bug_reader
-    type: agent
+    assistant_id: jira_agent
     next: code_analysis
-    assistant_id: fc1a2c0b-48c7-484a-aef3-5890f1a68e7e
-    is_connected: true
-    position:
-      x: 0
-      y: 240
-    measured:
-      width: 256
-      height: 66
-    data: {}
-    selected: false
+    output_schema: |
+      {
+        "issueId": "ticket ID",
+        "summary": "bug title",
+        "exceptionType": "NullReferenceException | TimeoutException | InvalidOperationException | ArgumentOutOfRangeException | Other",
+        "exceptionMessage": "exact error message text",
+        "stackTrace": "full stack trace text",
+        "topFailingMethod": "method name from top of stack trace",
+        "topFailingFile": "file path from stack trace",
+        "httpErrorCode": "500 or other HTTP code if mentioned",
+        "isIntermittent": "true or false",
+        "priority": "ticket priority",
+        "reporter": "who reported it"
+      }
+    task: |
+      Deeply analyze the Jira bug ticket found in the previous step.
+
+      If issueId from previous step is null, return: { "error": "No ticket to analyze" }
+
+      Otherwise use Jira tool to fetch full ticket including comments:
+      GET /rest/api/2/issue/{issueId}?expand=comments,changelog
+
+      Extract carefully:
+      - Exception type (NullReferenceException, TimeoutException, InvalidOperationException, ArgumentOutOfRangeException)
+      - Full stack trace
+      - Top failing method — first method listed in stack trace
+      - File or class where error happened
+      - HTTP error code if mentioned (500, 503, 404)
+      - Whether the bug is intermittent or always reproducible
+
+      Return valid JSON only matching the output schema. No extra text.
 
   - id: code_analysis
-    type: agent
+    assistant_id: github_agent
     next: root_cause
-    assistant_id: cae0dda5-b60c-4cb3-8118-ef2678f66e40
-    is_connected: true
-    position:
-      x: 0
-      y: 360
-    measured:
-      width: 256
-      height: 66
-    data: {}
-    selected: false
+    output_schema: |
+      {
+        "filesRead": ["list of files read"],
+        "buggyCodeFound": "true or false",
+        "buggyMethod": "name of the method with the bug",
+        "buggyFile": "file path containing the bug",
+        "buggyCodeSnippet": "exact lines of problematic code",
+        "problemDescription": "clear explanation of what the code is doing wrong",
+        "affectedEndpoints": ["list of affected API endpoints"],
+        "configurationIssues": ["list of config problems found"],
+        "otherProblems": ["any other problems found"]
+      }
+    task: |
+      Read the source code from GitHub repo soundar-14/MultiAgentKataApp to find the bug.
+
+      Read these files using the GitHub tool:
+      - MultiAgentKataApp/Controllers/BugController.cs
+      - MultiAgentKataApp/Services/OrderService.cs
+      - MultiAgentKataApp/appsettings.json
+
+      Based on the exceptionType from the previous step, look for:
+
+      NullReferenceException:
+      Find objects accessed without null check. Look for ! operator (e.g. order.Customer!.Name)
+      or missing ? null conditional operator.
+
+      TimeoutException or connection pool exhaustion:
+      Check connection string in appsettings.json for missing Max Pool Size.
+      Find DB calls without timeout. Find methods loading all records without pagination.
+
+      InvalidOperationException:
+      Check appsettings.json for missing or empty config keys.
+      Find code reading config without fallback value.
+
+      ArgumentOutOfRangeException:
+      Find input parameters passed directly to DateTime or array constructors without bounds check.
+
+      Return valid JSON only matching the output schema. No extra text.
 
   - id: root_cause
-    type: agent
+    assistant_id: reasoning_agent
     next: solution
-    assistant_id: 0c626beb-3e05-4836-bd0a-62035b793db3
-    is_connected: true
-    position:
-      x: 0
-      y: 480
-    measured:
-      width: 256
-      height: 66
-    data: {}
-    selected: false
+    output_schema: |
+      {
+        "rootCauseCategory": "NULL_REFERENCE | CONNECTION_POOL_EXHAUSTION | CONFIGURATION_MISSING | INPUT_VALIDATION_MISSING | RACE_CONDITION | EXTERNAL_TIMEOUT",
+        "rootCauseExplanation": "detailed explanation of why this causes the reported exception",
+        "confidence": "HIGH | MEDIUM | LOW",
+        "affectedLayer": "Controller | Service | Repository | Configuration",
+        "affectedMethod": "exact method name with the bug",
+        "isIntermittent": "true or false",
+        "intermittencyReason": "explain why it only happens sometimes",
+        "evidence": ["list of specific code evidence supporting this conclusion"]
+      }
+    task: |
+      Identify the definitive root cause by combining the bug report and code analysis
+      from the previous steps.
+
+      Choose the ONE best fitting category:
+      NULL_REFERENCE             - Object used before checking if it is null
+      CONNECTION_POOL_EXHAUSTION - Too many DB connections, no pool limit configured
+      CONFIGURATION_MISSING      - Required setting missing or empty in appsettings.json
+      INPUT_VALIDATION_MISSING   - No bounds check before using user input
+      RACE_CONDITION             - Two requests modify same data without locking
+      EXTERNAL_TIMEOUT           - API or DB call has no timeout configured
+
+      Explain exactly WHY this causes the reported exception using specific code evidence.
+      Determine if it is intermittent and explain the trigger condition.
+
+      Return valid JSON only matching the output schema. No extra text.
 
   - id: solution
-    type: agent
+    assistant_id: github_agent
     next: summary
-    assistant_id: 52d9e2e9-2fc6-4a47-97b1-f50cd7c58ce4
-    is_connected: true
-    position:
-      x: 0
-      y: 600
-    measured:
-      width: 256
-      height: 66
-    data: {}
-    selected: false
+    output_schema: |
+      {
+        "primaryFix": {
+          "file": "file path",
+          "method": "method name",
+          "beforeCode": "exact current buggy code",
+          "afterCode": "exact fixed code",
+          "explanation": "what changed and why"
+        },
+        "configurationFix": {
+          "file": "appsettings.json",
+          "before": "current config value",
+          "after": "fixed config value"
+        },
+        "additionalRecommendations": ["recommendation 1", "recommendation 2"],
+        "estimatedFixTime": "e.g. 1 hour",
+        "fixComplexity": "LOW | MEDIUM | HIGH"
+      }
+    task: |
+      Provide the exact code fix for the bug identified in previous steps.
+
+      Use GitHub tool to re-read the exact buggy method from repo soundar-14/MultiAgentKataApp.
+      Write the EXACT fix showing before code and after fixed code.
+
+      Apply these fix patterns based on the root cause category from previous step:
+
+      NULL_REFERENCE:
+      Before: return Ok(new { Customer = order.Customer!.Name });
+      After: if (order == null) return NotFound();
+             return Ok(new { Customer = order?.Customer?.Name ?? "Unknown" });
+
+      CONNECTION_POOL_EXHAUSTION:
+      Add Max Pool Size=50;Connection Timeout=30; to connection string in appsettings.json
+      Add page and pageSize parameters to GetAllOrders method.
+
+      CONFIGURATION_MISSING:
+      Add missing key with correct value to appsettings.json.
+      Add startup validation to fail fast if key is missing.
+
+      INPUT_VALIDATION_MISSING:
+      Add if (month < 1 || month > 12) return BadRequest("Month must be between 1 and 12");
+      before the problematic code.
+
+      RACE_CONDITION:
+      Add private static readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
+      Wrap update with await _lock.WaitAsync() and finally _lock.Release().
+
+      Return valid JSON only matching the output schema. No extra text.
 
   - id: summary
-    type: agent
+    assistant_id: jira_agent
     next: end
-    assistant_id: 22192129-4479-4bb3-8d08-80ae0ac1a6fa
-    is_connected: true
-    position:
-      x: 0
-      y: 720
-    measured:
-      width: 256
-      height: 66
-    data: {}
-    selected: false
+    output_schema: |
+      {
+        "issueId": "Jira ticket ID",
+        "finalPriority": "P1 | P2 | P3 | P4",
+        "commentPosted": "true or false",
+        "ticketMovedToInProgress": "true or false",
+        "reportSummary": "one paragraph summary for management",
+        "nextSteps": ["step 1", "step 2", "step 3"]
+      }
+    task: |
+      Compile all analysis from previous steps and post the report to Jira.
+
+      STEP 1 — Assign final priority:
+      P1 = Production down, all users affected, data loss risk
+      P2 = Major feature broken, no workaround, many users hit this
+      P3 = Bug exists but workaround is possible
+      P4 = Minor edge case, very rare occurrence
+
+      STEP 2 — Post a comment to the Jira ticket using Jira tool:
+      POST /rest/api/2/issue/{issueId}/comment
+
+      Use this comment format:
+      ---
+      AI Bug Analysis Report — Multi-Agent System
+
+      ISSUE SUMMARY
+      {one sentence description}
+
+      PRIORITY: {P1 / P2 / P3 / P4}
+
+      ROOT CAUSE
+      Category: {rootCauseCategory}
+      Explanation: {rootCauseExplanation}
+      Confidence: {confidence}
+      Affected Layer: {affectedLayer}
+      Affected Method: {affectedMethod}
+
+      SUGGESTED FIX
+      File: {primaryFix.file}
+      BEFORE: {primaryFix.beforeCode}
+      AFTER: {primaryFix.afterCode}
+      Explanation: {primaryFix.explanation}
+
+      CONFIGURATION CHANGES: {configurationFix}
+
+      ADDITIONAL RECOMMENDATIONS:
+      {each recommendation on a new line}
+
+      Estimated Fix Time: {estimatedFixTime}
+      Regression Risk: {fixComplexity}
+
+      Note: AI-generated analysis. Human review required before production.
+      ---
+
+      STEP 3 — Move ticket to In Progress:
+      GET /rest/api/2/issue/{issueId}/transitions to find transition ID for In Progress.
+      POST /rest/api/2/issue/{issueId}/transitions with body: { "transition": { "id": "{id}" } }
+
+      Return valid JSON only matching the output schema. No extra text.
 
 meta_states:
   - id: start
     type: start
-    next: jira_ticket_picker
-    is_connected: true
+    is_connected: false
     position:
       x: 0
-      y: 20
+      y: 117.5
     measured:
       width: 256
       height: 66
     data: {}
+    selected: false
+  - id: jira_ticket_picker
+    type: assistant
+    is_connected: true
+    position:
+      x: 360
+      y: 117.5
+    measured:
+      width: 256
+      height: 66
+    selected: false
+  - id: bug_reader
+    type: assistant
+    is_connected: true
+    position:
+      x: 720
+      y: 117.5
+    measured:
+      width: 256
+      height: 66
+    selected: false
+  - id: code_analysis
+    type: assistant
+    is_connected: true
+    position:
+      x: 1080
+      y: 117.5
+    measured:
+      width: 256
+      height: 66
+    selected: false
+  - id: root_cause
+    type: assistant
+    is_connected: true
+    position:
+      x: 1440
+      y: 117.5
+    measured:
+      width: 256
+      height: 66
+    selected: false
+  - id: solution
+    type: assistant
+    is_connected: true
+    position:
+      x: 1800
+      y: 117.5
+    measured:
+      width: 256
+      height: 66
+    selected: false
+  - id: summary
+    type: assistant
+    is_connected: true
+    position:
+      x: 2160
+      y: 117.5
+    measured:
+      width: 256
+      height: 66
     selected: false
   - id: end
     type: end
     is_connected: true
     position:
-      x: 0
-      y: 860
+      x: 2520
+      y: 117.5
     measured:
       width: 256
       height: 66
