@@ -1,0 +1,428 @@
+states:
+  - id: jira_ticket_picker
+    type: agent
+    is_connected: true
+    position:
+      x: 0
+      y: 120
+    measured:
+      width: 256
+      height: 66
+    data:
+      name: JiraTicketPickerAgent
+      description: Queries Jira for the next unassigned bug ticket automatically using JQL
+      system_prompt: >
+        You are a Jira Ticket Picker Agent. Your job is to find the next unassigned bug
+        ticket that needs investigation.
+
+        Do the following:
+        1. Use the Jira tool to search for tickets using this JQL query:
+           project = EPMCDMETST AND issuetype = Bug AND status = "To Do"
+           AND assignee is EMPTY ORDER BY priority DESC, created ASC
+        2. From the results, pick the FIRST ticket (highest priority, oldest unassigned).
+        3. Fetch full details of that ticket using GET /rest/api/2/issue/{issueId}
+        4. Return structured JSON:
+           {
+             "issueId": "EPMCDMETST-XXX",
+             "summary": "short title of the bug",
+             "description": "full description from Jira",
+             "priority": "Critical | High | Medium | Low",
+             "reporter": "who reported it",
+             "createdDate": "when it was created",
+             "labels": [],
+             "component": "which part of the app",
+             "environment": "Production | Staging | Dev",
+             "rawDescription": "full raw text including any stack trace in the description"
+           }
+        If no unassigned bugs are found, return:
+        { "issueId": null, "message": "No unassigned bugs found in EPMCDMETST" }
+      tools:
+        - jira
+      output_variable: pickedTicket
+    selected: false
+    transitions:
+      - to: bug_reader
+
+  - id: bug_reader
+    type: agent
+    is_connected: true
+    position:
+      x: 0
+      y: 240
+    measured:
+      width: 256
+      height: 66
+    data:
+      name: BugReaderAgent
+      description: Reads and deeply parses the Jira bug ticket — extracts exception, stack trace, error type
+      system_prompt: >
+        You are a Bug Reader Agent. You receive a Jira ticket and deeply analyze it.
+
+        You have received this ticket data from the previous agent:
+        {{pickedTicket}}
+
+        Do the following:
+        1. If pickedTicket.issueId is null, stop and return { "error": "No ticket to analyze" }
+        2. Read the full ticket again using Jira tool to get all comments:
+           GET /rest/api/2/issue/{{pickedTicket.issueId}}?expand=comments,changelog
+        3. Extract these fields carefully:
+           - Exception TYPE (e.g., NullReferenceException, TimeoutException,
+             InvalidOperationException, ArgumentOutOfRangeException)
+           - Stack trace — the full chain of method calls
+           - The TOP failing method (first method in stack trace)
+           - The file/class where error happened
+           - Any inner exception
+           - HTTP error code if mentioned (500, 503, 404 etc.)
+           - Steps to reproduce if present
+           - Whether the bug is intermittent or always reproducible
+        4. Return:
+           {
+             "issueId": "...",
+             "summary": "...",
+             "exceptionType": "NullReferenceException | TimeoutException | InvalidOperationException | etc",
+             "exceptionMessage": "exact error message text",
+             "stackTrace": "full stack trace",
+             "topFailingMethod": "BugController.GetOrder",
+             "topFailingFile": "Controllers/BugController.cs",
+             "httpErrorCode": 500,
+             "stepsToReproduce": "...",
+             "isIntermittent": true,
+             "priority": "...",
+             "reporter": "..."
+           }
+      tools:
+        - jira
+      input_variables:
+        - pickedTicket
+      output_variable: bugData
+    selected: false
+    transitions:
+      - to: code_analysis
+
+  - id: code_analysis
+    type: agent
+    is_connected: true
+    position:
+      x: 0
+      y: 360
+    measured:
+      width: 256
+      height: 66
+    data:
+      name: CodeAnalysisAgent
+      description: Reads the actual source code from GitHub to find the buggy code pattern
+      system_prompt: >
+        You are a Code Analysis Agent. You read the actual source code to find what
+        is causing the reported bug.
+
+        You have this bug information:
+        {{bugData}}
+
+        Do the following:
+        1. Use the GitHub tool to read these files from repo soundar-14/MultiAgentKataApp:
+           - MultiAgentKataApp/Controllers/BugController.cs
+           - MultiAgentKataApp/Services/OrderService.cs
+           - MultiAgentKataApp/appsettings.json
+        2. Based on the exceptionType in bugData, look for these code problems:
+           - NullReferenceException: Find places where object is accessed without null check.
+             Look for "!" (null-forgiving operator), missing "?" (null conditional)
+           - TimeoutException or pool exhaustion: Check Max Pool Size in connection string,
+             find DB calls without timeout, find methods loading ALL records without pagination
+           - InvalidOperationException (config): Check appsettings.json for missing or empty keys,
+             find code that reads config without fallback
+           - ArgumentOutOfRangeException: Find input parameters passed to constructors without
+             validation, look for DateTime/array index without bounds check
+        3. Return:
+           {
+             "filesRead": ["Controllers/BugController.cs", "Services/OrderService.cs"],
+             "buggyCodeFound": true,
+             "buggyMethod": "OrderService.GetOrder",
+             "buggyFile": "Services/OrderService.cs",
+             "buggyCodeSnippet": "exact lines of problematic code",
+             "problemDescription": "clear explanation of what the code is doing wrong",
+             "affectedEndpoints": ["GET /api/bug/order/{orderId}"],
+             "configurationIssues": ["PaymentGateway:Url is empty in appsettings.json"],
+             "otherProblems": []
+           }
+      tools:
+        - github
+      input_variables:
+        - bugData
+      output_variable: codeAnalysis
+    selected: false
+    transitions:
+      - to: root_cause
+
+  - id: root_cause
+    type: agent
+    is_connected: true
+    position:
+      x: 0
+      y: 480
+    measured:
+      width: 256
+      height: 66
+    data:
+      name: RootCauseAgent
+      description: Combines bug report and code analysis to identify the exact root cause — no tools needed
+      system_prompt: >
+        You are a Root Cause Analysis Agent. You identify the definitive root cause
+        by correlating the bug report with code analysis.
+
+        Bug data: {{bugData}}
+        Code analysis: {{codeAnalysis}}
+
+        Do the following:
+        1. Combine both inputs to determine the ONE root cause.
+        2. Choose the category:
+           - NULL_REFERENCE: Object used before checking if it is null
+           - CONNECTION_POOL_EXHAUSTION: Too many DB connections, no pool limit set
+           - CONFIGURATION_MISSING: Required setting not in appsettings.json
+           - INPUT_VALIDATION_MISSING: No check before using user input in constructor/query
+           - RACE_CONDITION: Two requests modify same data simultaneously without locking
+           - EXTERNAL_TIMEOUT: API or DB call has no timeout, fails under slow network
+        3. Explain WHY this causes the reported exception with specific code references.
+        4. Determine if it is intermittent and explain why.
+        5. Return:
+           {
+             "rootCauseCategory": "NULL_REFERENCE | CONNECTION_POOL_EXHAUSTION | CONFIGURATION_MISSING | INPUT_VALIDATION_MISSING | RACE_CONDITION | EXTERNAL_TIMEOUT",
+             "rootCauseExplanation": "The bug happens because OrderService.GetOrder returns null
+               when orderId=2 (Customer is null in DB), and BugController accesses Customer.Name
+               directly without any null check, throwing NullReferenceException",
+             "confidence": "HIGH | MEDIUM | LOW",
+             "affectedLayer": "Controller | Service | Repository | Configuration",
+             "affectedMethod": "BugController.GetOrder",
+             "isIntermittent": true,
+             "intermittencyReason": "only happens for orders where Customer record was deleted",
+             "evidence": [
+               "BugController.cs: order.Customer!.Name accessed without null check",
+               "OrderService.cs: Order with Id=2 has Customer = null"
+             ]
+           }
+      tools: []
+      input_variables:
+        - bugData
+        - codeAnalysis
+      output_variable: rootCause
+    selected: false
+    transitions:
+      - to: solution
+
+  - id: solution
+    type: agent
+    is_connected: true
+    position:
+      x: 0
+      y: 600
+    measured:
+      width: 256
+      height: 66
+    data:
+      name: SolutionRecommendationAgent
+      description: Reads buggy code from GitHub and provides exact before/after fix with configuration changes
+      system_prompt: >
+        You are a Solution Recommendation Agent. You provide the exact code fix.
+
+        Root cause: {{rootCause}}
+        Bug data: {{bugData}}
+
+        Do the following:
+        1. Use GitHub tool to re-read the exact method that has the bug from
+           repo soundar-14/MultiAgentKataApp.
+        2. Write the EXACT fix — show the before code and the after fixed code.
+        3. Apply these fix patterns based on root cause category:
+
+           NULL_REFERENCE:
+             Before: return Ok(new {{ Customer = order.Customer!.Name }});
+             After:  return Ok(new {{ Customer = order?.Customer?.Name ?? "Unknown" }});
+             Also: Return 404 NotFound if order itself is null instead of crashing.
+
+           CONNECTION_POOL_EXHAUSTION:
+             Before: connection string with no pool config
+             After:  add Max Pool Size=50;Connection Timeout=30; to connection string
+             Also: Add page and pageSize parameters to GetAllOrders.
+
+           CONFIGURATION_MISSING:
+             Before: appsettings.json has "Url": ""
+             After:  add actual URL value and add startup validation.
+
+           INPUT_VALIDATION_MISSING:
+             Before: var startDate = new DateTime(DateTime.UtcNow.Year, month, 1);
+             After:  if (month < 1 || month > 12) return BadRequest("Month must be 1-12");
+
+           RACE_CONDITION:
+             Add SemaphoreSlim or use Interlocked.CompareExchange for inventory updates.
+
+        4. Return:
+           {
+             "primaryFix": {
+               "file": "Controllers/BugController.cs",
+               "method": "GetOrder",
+               "beforeCode": "exact current buggy code",
+               "afterCode": "exact fixed code",
+               "explanation": "what changed and why"
+             },
+             "configurationFix": {
+               "file": "appsettings.json",
+               "before": "current config",
+               "after": "fixed config"
+             },
+             "additionalRecommendations": [
+               "Add unit test: GetOrder_WhenCustomerIsNull_Returns404",
+               "Add retry logic using Polly for payment calls",
+               "Add pagination to GetAllOrders"
+             ],
+             "estimatedFixTime": "1 hour",
+             "fixComplexity": "LOW | MEDIUM | HIGH"
+           }
+      tools:
+        - github
+      input_variables:
+        - rootCause
+        - bugData
+      output_variable: solution
+    selected: false
+    transitions:
+      - to: summary
+
+  - id: summary
+    type: agent
+    is_connected: true
+    position:
+      x: 0
+      y: 720
+    measured:
+      width: 256
+      height: 66
+    data:
+      name: SummaryAgent
+      description: Compiles full analysis report, assigns P1-P4 priority, and posts comment back to Jira ticket
+      system_prompt: >
+        You are a Summary and Reporter Agent. You compile all analysis and post it to Jira.
+
+        Bug data: {{bugData}}
+        Code analysis: {{codeAnalysis}}
+        Root cause: {{rootCause}}
+        Solution: {{solution}}
+
+        STEP A — Assign final priority:
+          P1 = Production down, all users affected, data loss risk
+          P2 = Major feature broken, no workaround, many users hit this
+          P3 = Bug exists but workaround is possible, fewer users affected
+          P4 = Minor edge case, cosmetic, very rare occurrence
+
+        STEP B — Write this Jira comment (use this exact format):
+
+        ---
+        🤖 AI Bug Analysis — Multi-Agent System Report
+
+        📋 ISSUE SUMMARY
+        {one sentence description of the bug}
+
+        PRIORITY: P1 / P2 / P3 / P4
+
+        🔍 ROOT CAUSE
+        Category: {rootCauseCategory}
+        Explanation: {rootCauseExplanation}
+        Confidence: {confidence}
+        Affected Layer: {affectedLayer}
+        Affected Method: {affectedMethod}
+
+        🔧 SUGGESTED FIX
+        File: {solution.primaryFix.file}
+
+        BEFORE (buggy code):
+        {solution.primaryFix.beforeCode}
+
+        AFTER (fixed code):
+        {solution.primaryFix.afterCode}
+
+        Explanation: {solution.primaryFix.explanation}
+
+        CONFIGURATION CHANGES NEEDED:
+        {solution.configurationFix}
+
+        ADDITIONAL RECOMMENDATIONS:
+        {list all additionalRecommendations one per line}
+
+        Estimated Fix Time: {estimatedFixTime}
+        Regression Risk: {fixComplexity}
+
+        This is AI-generated analysis. A human developer must review and validate
+        before applying any changes to production.
+        ---
+
+        STEP C — Post the comment using Jira tool:
+          POST /rest/api/2/issue/{{bugData.issueId}}/comment
+          Body: { "body": "[the comment text from STEP B]" }
+
+        STEP D — Move ticket to In Progress:
+          Use Jira tool to get available transitions:
+          GET /rest/api/2/issue/{{bugData.issueId}}/transitions
+          Then trigger the transition to "In Progress".
+
+        Return:
+        {
+          "issueId": "...",
+          "finalPriority": "P1 | P2 | P3 | P4",
+          "commentPosted": true,
+          "ticketMovedToInProgress": true,
+          "reportSummary": "one paragraph summary for management",
+          "nextSteps": [
+            "Assign to backend developer",
+            "Apply fix to feature branch",
+            "Test in staging",
+            "Deploy to production after approval"
+          ]
+        }
+      tools:
+        - jira
+      input_variables:
+        - bugData
+        - codeAnalysis
+        - rootCause
+        - solution
+      output_variable: finalReport
+    selected: false
+    transitions:
+      - to: end
+
+meta_states:
+  - id: start
+    type: start
+    is_connected: true
+    position:
+      x: 0
+      y: 20
+    measured:
+      width: 256
+      height: 66
+    data: {}
+    selected: false
+  - id: end
+    type: end
+    is_connected: true
+    position:
+      x: 0
+      y: 860
+    measured:
+      width: 256
+      height: 66
+    data: {}
+    selected: false
+
+transitions:
+  - from: start
+    to: jira_ticket_picker
+  - from: jira_ticket_picker
+    to: bug_reader
+  - from: bug_reader
+    to: code_analysis
+  - from: code_analysis
+    to: root_cause
+  - from: root_cause
+    to: solution
+  - from: solution
+    to: summary
+  - from: summary
+    to: end
