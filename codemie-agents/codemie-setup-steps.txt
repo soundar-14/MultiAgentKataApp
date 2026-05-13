@@ -1,0 +1,213 @@
+# CodeMie Workflow Setup — Step-by-Step Guide
+# Use Case 11: Bug Analysis & Fix Recommendation Multi-Agent System
+
+===========================================
+STEP 1: LOGIN TO CODEMIE
+===========================================
+1. Go to: https://www.codemie.ai (or your EPAM internal CodeMie instance)
+2. Sign in with your EPAM SSO credentials
+3. Navigate to your Workspace / Project dashboard
+
+===========================================
+STEP 2: CREATE A NEW WORKFLOW
+===========================================
+⚠️ IMPORTANT: Choose WORKFLOW (not "Assistant" or "Orchestrator")
+
+WHY WORKFLOW over ORCHESTRATOR?
+✅ Bug analysis is sequential (predictable 5-step pipeline)
+✅ Each agent has clear input/output — easy to audit
+✅ Deterministic — no LLM guessing which agent to call next
+✅ Human review step is easy to add between agents
+✅ Better for production use where consistency matters
+
+HOW TO CREATE:
+1. Click "Create New" → Select "Workflow"
+2. Name: Bug-Analysis-MultiAgent-Workflow
+3. Description: 5-agent pipeline for automated bug investigation and fix recommendation
+4. Tags: multi-agent, bug-analysis, jira, github
+
+===========================================
+STEP 3: CONFIGURE JIRA INTEGRATION
+===========================================
+1. Go to Settings → Tools / Integrations
+2. Click "Add Tool" → Search "Jira"
+3. Configuration:
+   - Display Name: EPAM Jira
+   - Base URL: https://jiraeu.epam.com
+   - Auth Type: Bearer Token (Personal Access Token)
+   - Token: [Your Jira Access Token]
+4. Click "Test Connection"
+5. Verify project EPMCDMETST is accessible
+6. Enable these Jira capabilities:
+   ✅ Read Issue  (GET /rest/api/2/issue/{issueId})
+   ✅ Search Issues  (GET /rest/api/2/search?jql=...)
+   ✅ Add Comment  (POST /rest/api/2/issue/{issueId}/comment)
+   ✅ Update Issue  (PUT /rest/api/2/issue/{issueId})
+   ✅ Get Issue Comments  (GET /rest/api/2/issue/{issueId}/comment)
+
+===========================================
+STEP 4: CONFIGURE GITHUB INTEGRATION
+===========================================
+1. Click "Add Tool" → Search "GitHub"
+2. Configuration:
+   - Display Name: MultiAgent Sample App
+   - GitHub Token: [Your GitHub Personal Access Token]
+   - Default Repository: soundar-14/MultiAgentKataApp
+3. Enable these GitHub capabilities:
+   ✅ Get File Contents
+   ✅ Search Code in Repository
+   ✅ List Repository Files
+   ✅ Get Commits
+
+===========================================
+STEP 5: ADD WORKFLOW INPUT
+===========================================
+1. In Workflow Designer, click the START node
+2. Add Input Parameter:
+   - Name: jiraIssueId
+   - Type: String
+   - Description: Jira ticket ID (e.g., EPMCDMETST-123)
+   - Required: Yes
+   - Example Value: EPMCDMETST-1
+
+===========================================
+STEP 6: ADD AGENT 1 — Bug Reader Agent
+===========================================
+1. Click "+" → Add "AI Agent" block
+2. Set Name: BugReaderAgent
+3. Model: GPT-4o or Claude Sonnet (your preference)
+4. Attach Tool: EPAM Jira
+5. Input Binding: jiraIssueId → from workflow input
+6. Paste System Prompt from: codemie-agents/agent-prompts.txt (AGENT 1 section)
+7. Output Variable Name: bugData
+8. Output Type: JSON
+
+===========================================
+STEP 7: ADD AGENT 2 — Log Analysis Agent
+===========================================
+1. Click "+" after Agent 1 → Add "AI Agent" block
+2. Set Name: LogAnalysisAgent
+3. Attach Tool: GitHub (MultiAgent Sample App)
+4. Input Binding: bugData → from BugReaderAgent.output
+5. Paste System Prompt from: codemie-agents/agent-prompts.txt (AGENT 2 section)
+6. Output Variable Name: logAnalysis
+7. Output Type: JSON
+
+===========================================
+STEP 8: ADD AGENT 3 — Root Cause Analysis Agent
+===========================================
+1. Click "+" after Agent 2 → Add "AI Agent" block
+2. Set Name: RootCauseAgent
+3. Attach Tool: NONE (pure reasoning — no external tools needed)
+4. Input Binding:
+   - bugData → from BugReaderAgent.output
+   - logAnalysis → from LogAnalysisAgent.output
+5. Paste System Prompt from: codemie-agents/agent-prompts.txt (AGENT 3 section)
+6. Output Variable Name: rootCause
+7. Output Type: JSON
+
+===========================================
+STEP 9: ADD AGENT 4 — Solution Recommendation Agent
+===========================================
+1. Click "+" after Agent 3 → Add "AI Agent" block
+2. Set Name: SolutionRecommendationAgent
+3. Attach Tool: GitHub (MultiAgent Sample App)
+4. Input Binding:
+   - rootCause → from RootCauseAgent.output
+   - bugData → from BugReaderAgent.output
+5. Paste System Prompt from: codemie-agents/agent-prompts.txt (AGENT 4 section)
+6. Output Variable Name: solution
+7. Output Type: JSON
+
+===========================================
+STEP 10: ADD AGENT 5 — Summary Agent
+===========================================
+1. Click "+" after Agent 4 → Add "AI Agent" block
+2. Set Name: SummaryAgent
+3. Attach Tool: EPAM Jira
+4. Input Binding:
+   - bugData → from BugReaderAgent.output
+   - logAnalysis → from LogAnalysisAgent.output
+   - rootCause → from RootCauseAgent.output
+   - solution → from SolutionRecommendationAgent.output
+5. Paste System Prompt from: codemie-agents/agent-prompts.txt (AGENT 5 section)
+6. Output Variable Name: finalReport
+7. Output Type: JSON
+
+===========================================
+STEP 11: ADD HUMAN REVIEW STEP (Optional)
+===========================================
+1. After SummaryAgent, add a "Human Approval" block
+2. Configure:
+   - Assignee: Developer/Team Lead
+   - Message: "Review AI analysis before applying fix to production"
+   - Options: "Approve Fix" | "Request Revision" | "Reject"
+3. This creates a human-in-the-loop checkpoint
+
+===========================================
+STEP 12: CONFIGURE WORKFLOW END
+===========================================
+1. Connect Human Review → END node
+2. Set Final Output: finalReport (from SummaryAgent)
+3. Click "Save Workflow"
+
+===========================================
+WORKFLOW VISUAL FLOW:
+===========================================
+
+[START]
+   │ Input: jiraIssueId
+   ↓
+[BugReaderAgent]  ← Jira Tool
+   │ Output: bugData
+   ↓
+[LogAnalysisAgent]  ← GitHub Tool
+   │ Input: bugData
+   │ Output: logAnalysis
+   ↓
+[RootCauseAgent]  ← No Tools (LLM reasoning)
+   │ Input: bugData + logAnalysis
+   │ Output: rootCause
+   ↓
+[SolutionRecommendationAgent]  ← GitHub Tool
+   │ Input: rootCause + bugData
+   │ Output: solution
+   ↓
+[SummaryAgent]  ← Jira Tool (posts comment back)
+   │ Input: bugData + logAnalysis + rootCause + solution
+   │ Output: finalReport
+   ↓
+[Human Review] ← Optional approval step
+   ↓
+[END]
+
+===========================================
+STEP 13: TEST THE WORKFLOW
+===========================================
+1. Create a test Jira ticket in EPMCDMETST:
+   Title: "GET /api/bug/order/2 returns 500 — NullReferenceException"
+   Description:
+   """
+   System.NullReferenceException: Object reference not set to an instance of an object.
+   at MultiAgentKataApp.Controllers.BugController.GetOrder(Int32 orderId)
+   at MultiAgentKataApp.Services.OrderService.GetOrder(Int32 orderId)
+   The Customer object is null for orderId=2. Controller accesses Customer.Name directly
+   without null check causing intermittent 500 errors.
+   """
+   Priority: High
+   Component: MultiAgentKataApp/Controllers
+
+2. Run workflow:
+   - Click "Run Workflow"
+   - Enter Input: jiraIssueId = EPMCDMETST-[your ticket number]
+   - Click "Execute"
+
+3. Monitor each agent step in real-time
+4. Verify outputs:
+   ✅ Agent 1: Extracts exception type = NullReferenceException, stack trace
+   ✅ Agent 2: Finds BugController.cs line with Customer!.Name
+   ✅ Agent 3: Root Cause = NULL_REFERENCE, confidence = HIGH
+   ✅ Agent 4: Fix = add null check, use order?.Customer?.Name ?? "Unknown"
+   ✅ Agent 5: P2 priority report posted as Jira comment
+
+5. Check Jira ticket — AI analysis should appear as a comment
