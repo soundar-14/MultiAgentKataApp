@@ -9,6 +9,7 @@ states:
       width: 256
       height: 66
     data:
+      custom_node_id: jira_ticket_picker
       name: JiraTicketPickerAgent
       description: Queries Jira for the next unassigned bug ticket automatically using JQL
       system_prompt: >
@@ -41,7 +42,7 @@ states:
       output_variable: pickedTicket
     selected: false
     transitions:
-      - to: bug_reader
+      - next: bug_reader
 
   - id: bug_reader
     type: agent
@@ -53,6 +54,7 @@ states:
       width: 256
       height: 66
     data:
+      custom_node_id: bug_reader
       name: BugReaderAgent
       description: Reads and deeply parses the Jira bug ticket — extracts exception, stack trace, error type
       system_prompt: >
@@ -70,7 +72,7 @@ states:
              InvalidOperationException, ArgumentOutOfRangeException)
            - Stack trace — the full chain of method calls
            - The TOP failing method (first method in stack trace)
-           - The file/class where error happened
+           - The file or class where error happened
            - Any inner exception
            - HTTP error code if mentioned (500, 503, 404 etc.)
            - Steps to reproduce if present
@@ -97,7 +99,7 @@ states:
       output_variable: bugData
     selected: false
     transitions:
-      - to: code_analysis
+      - next: code_analysis
 
   - id: code_analysis
     type: agent
@@ -109,6 +111,7 @@ states:
       width: 256
       height: 66
     data:
+      custom_node_id: code_analysis
       name: CodeAnalysisAgent
       description: Reads the actual source code from GitHub to find the buggy code pattern
       system_prompt: >
@@ -125,13 +128,13 @@ states:
            - MultiAgentKataApp/appsettings.json
         2. Based on the exceptionType in bugData, look for these code problems:
            - NullReferenceException: Find places where object is accessed without null check.
-             Look for "!" (null-forgiving operator), missing "?" (null conditional)
+             Look for ! null-forgiving operator or missing ? null conditional operator.
            - TimeoutException or pool exhaustion: Check Max Pool Size in connection string,
-             find DB calls without timeout, find methods loading ALL records without pagination
-           - InvalidOperationException (config): Check appsettings.json for missing or empty keys,
-             find code that reads config without fallback
+             find DB calls without timeout, find methods loading all records without pagination.
+           - InvalidOperationException config: Check appsettings.json for missing or empty keys,
+             find code that reads config without fallback value.
            - ArgumentOutOfRangeException: Find input parameters passed to constructors without
-             validation, look for DateTime/array index without bounds check
+             validation. Look for DateTime or array index without bounds check.
         3. Return:
            {
              "filesRead": ["Controllers/BugController.cs", "Services/OrderService.cs"],
@@ -151,7 +154,7 @@ states:
       output_variable: codeAnalysis
     selected: false
     transitions:
-      - to: root_cause
+      - next: root_cause
 
   - id: root_cause
     type: agent
@@ -163,6 +166,7 @@ states:
       width: 256
       height: 66
     data:
+      custom_node_id: root_cause
       name: RootCauseAgent
       description: Combines bug report and code analysis to identify the exact root cause — no tools needed
       system_prompt: >
@@ -174,11 +178,11 @@ states:
 
         Do the following:
         1. Combine both inputs to determine the ONE root cause.
-        2. Choose the category:
+        2. Choose the category that best fits:
            - NULL_REFERENCE: Object used before checking if it is null
            - CONNECTION_POOL_EXHAUSTION: Too many DB connections, no pool limit set
            - CONFIGURATION_MISSING: Required setting not in appsettings.json
-           - INPUT_VALIDATION_MISSING: No check before using user input in constructor/query
+           - INPUT_VALIDATION_MISSING: No check before using user input in constructor or query
            - RACE_CONDITION: Two requests modify same data simultaneously without locking
            - EXTERNAL_TIMEOUT: API or DB call has no timeout, fails under slow network
         3. Explain WHY this causes the reported exception with specific code references.
@@ -187,13 +191,13 @@ states:
            {
              "rootCauseCategory": "NULL_REFERENCE | CONNECTION_POOL_EXHAUSTION | CONFIGURATION_MISSING | INPUT_VALIDATION_MISSING | RACE_CONDITION | EXTERNAL_TIMEOUT",
              "rootCauseExplanation": "The bug happens because OrderService.GetOrder returns null
-               when orderId=2 (Customer is null in DB), and BugController accesses Customer.Name
-               directly without any null check, throwing NullReferenceException",
+               when orderId=2, and BugController accesses Customer.Name directly without any
+               null check, throwing NullReferenceException",
              "confidence": "HIGH | MEDIUM | LOW",
              "affectedLayer": "Controller | Service | Repository | Configuration",
              "affectedMethod": "BugController.GetOrder",
              "isIntermittent": true,
-             "intermittencyReason": "only happens for orders where Customer record was deleted",
+             "intermittencyReason": "only happens for orders where Customer record is null",
              "evidence": [
                "BugController.cs: order.Customer!.Name accessed without null check",
                "OrderService.cs: Order with Id=2 has Customer = null"
@@ -206,7 +210,7 @@ states:
       output_variable: rootCause
     selected: false
     transitions:
-      - to: solution
+      - next: solution
 
   - id: solution
     type: agent
@@ -218,8 +222,9 @@ states:
       width: 256
       height: 66
     data:
+      custom_node_id: solution
       name: SolutionRecommendationAgent
-      description: Reads buggy code from GitHub and provides exact before/after fix with configuration changes
+      description: Reads buggy code from GitHub and provides exact before and after fix with configuration changes
       system_prompt: >
         You are a Solution Recommendation Agent. You provide the exact code fix.
 
@@ -229,26 +234,23 @@ states:
         Do the following:
         1. Use GitHub tool to re-read the exact method that has the bug from
            repo soundar-14/MultiAgentKataApp.
-        2. Write the EXACT fix — show the before code and the after fixed code.
+        2. Write the EXACT fix showing before code and after fixed code.
         3. Apply these fix patterns based on root cause category:
 
            NULL_REFERENCE:
-             Before: return Ok(new {{ Customer = order.Customer!.Name }});
-             After:  return Ok(new {{ Customer = order?.Customer?.Name ?? "Unknown" }});
-             Also: Return 404 NotFound if order itself is null instead of crashing.
+             Before: return Ok(new Customer = order.Customer!.Name );
+             After: return Ok(new Customer = order?.Customer?.Name ?? "Unknown" );
+             Also return 404 NotFound if order itself is null instead of crashing.
 
            CONNECTION_POOL_EXHAUSTION:
-             Before: connection string with no pool config
-             After:  add Max Pool Size=50;Connection Timeout=30; to connection string
-             Also: Add page and pageSize parameters to GetAllOrders.
+             Add Max Pool Size=50 and Connection Timeout=30 to connection string.
+             Add page and pageSize parameters to GetAllOrders.
 
            CONFIGURATION_MISSING:
-             Before: appsettings.json has "Url": ""
-             After:  add actual URL value and add startup validation.
+             Add actual URL value to appsettings.json and add startup validation.
 
            INPUT_VALIDATION_MISSING:
-             Before: var startDate = new DateTime(DateTime.UtcNow.Year, month, 1);
-             After:  if (month < 1 || month > 12) return BadRequest("Month must be 1-12");
+             Add if month less than 1 or greater than 12 return BadRequest before processing.
 
            RACE_CONDITION:
              Add SemaphoreSlim or use Interlocked.CompareExchange for inventory updates.
@@ -268,7 +270,7 @@ states:
                "after": "fixed config"
              },
              "additionalRecommendations": [
-               "Add unit test: GetOrder_WhenCustomerIsNull_Returns404",
+               "Add unit test GetOrder_WhenCustomerIsNull_Returns404",
                "Add retry logic using Polly for payment calls",
                "Add pagination to GetAllOrders"
              ],
@@ -283,7 +285,7 @@ states:
       output_variable: solution
     selected: false
     transitions:
-      - to: summary
+      - next: summary
 
   - id: summary
     type: agent
@@ -295,8 +297,9 @@ states:
       width: 256
       height: 66
     data:
+      custom_node_id: summary
       name: SummaryAgent
-      description: Compiles full analysis report, assigns P1-P4 priority, and posts comment back to Jira ticket
+      description: Compiles full analysis report, assigns P1-P4 priority, posts comment to Jira and moves ticket to In Progress
       system_prompt: >
         You are a Summary and Reporter Agent. You compile all analysis and post it to Jira.
 
@@ -311,55 +314,52 @@ states:
           P3 = Bug exists but workaround is possible, fewer users affected
           P4 = Minor edge case, cosmetic, very rare occurrence
 
-        STEP B — Write this Jira comment (use this exact format):
+        STEP B — Write a Jira comment in this format:
 
-        ---
-        🤖 AI Bug Analysis — Multi-Agent System Report
+        AI Bug Analysis — Multi-Agent System Report
 
-        📋 ISSUE SUMMARY
-        {one sentence description of the bug}
+        ISSUE SUMMARY
+        Write one sentence description of the bug here.
 
-        PRIORITY: P1 / P2 / P3 / P4
+        PRIORITY: P1 or P2 or P3 or P4
 
-        🔍 ROOT CAUSE
-        Category: {rootCauseCategory}
-        Explanation: {rootCauseExplanation}
-        Confidence: {confidence}
-        Affected Layer: {affectedLayer}
-        Affected Method: {affectedMethod}
+        ROOT CAUSE
+        Category: write rootCauseCategory here
+        Explanation: write rootCauseExplanation here
+        Confidence: write confidence level here
+        Affected Layer: write affectedLayer here
+        Affected Method: write affectedMethod here
 
-        🔧 SUGGESTED FIX
-        File: {solution.primaryFix.file}
+        SUGGESTED FIX
+        File: write solution primaryFix file here
 
         BEFORE (buggy code):
-        {solution.primaryFix.beforeCode}
+        write solution primaryFix beforeCode here
 
         AFTER (fixed code):
-        {solution.primaryFix.afterCode}
+        write solution primaryFix afterCode here
 
-        Explanation: {solution.primaryFix.explanation}
+        Explanation: write solution primaryFix explanation here
 
         CONFIGURATION CHANGES NEEDED:
-        {solution.configurationFix}
+        write solution configurationFix here
 
         ADDITIONAL RECOMMENDATIONS:
-        {list all additionalRecommendations one per line}
+        write each additionalRecommendation on a separate line
 
-        Estimated Fix Time: {estimatedFixTime}
-        Regression Risk: {fixComplexity}
+        Estimated Fix Time: write estimatedFixTime here
+        Regression Risk: write fixComplexity here
 
-        This is AI-generated analysis. A human developer must review and validate
+        Note: This is AI-generated analysis. A human developer must review and validate
         before applying any changes to production.
-        ---
 
         STEP C — Post the comment using Jira tool:
           POST /rest/api/2/issue/{{bugData.issueId}}/comment
-          Body: { "body": "[the comment text from STEP B]" }
+          with the body containing the comment text from STEP B.
 
         STEP D — Move ticket to In Progress:
-          Use Jira tool to get available transitions:
-          GET /rest/api/2/issue/{{bugData.issueId}}/transitions
-          Then trigger the transition to "In Progress".
+          GET /rest/api/2/issue/{{bugData.issueId}}/transitions to find transition ID.
+          Then POST /rest/api/2/issue/{{bugData.issueId}}/transitions to trigger In Progress.
 
         Return:
         {
@@ -385,7 +385,7 @@ states:
       output_variable: finalReport
     selected: false
     transitions:
-      - to: end
+      - next: end
 
 meta_states:
   - id: start
@@ -413,16 +413,16 @@ meta_states:
 
 transitions:
   - from: start
-    to: jira_ticket_picker
+    next: jira_ticket_picker
   - from: jira_ticket_picker
-    to: bug_reader
+    next: bug_reader
   - from: bug_reader
-    to: code_analysis
+    next: code_analysis
   - from: code_analysis
-    to: root_cause
+    next: root_cause
   - from: root_cause
-    to: solution
+    next: solution
   - from: solution
-    to: summary
+    next: summary
   - from: summary
-    to: end
+    next: end
